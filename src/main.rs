@@ -1,3 +1,5 @@
+use bit_vec::BitVec;
+use rand::Rng;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -11,6 +13,7 @@ impl<T> Item<T>
 where
     T: Copy,
 {
+    // const NOTHING_MASK: usize = std::usize::MAX ^ (std::usize::MAX >> 1);
     const NOTHING: usize = 0;
     const NOTHING_ITEM: Self = Self {
         indirection: Self::NOTHING,
@@ -44,6 +47,8 @@ pub struct ContigStorage<T: Copy + Sized> {
     data: Vec<Item<T>>,
     len: usize,
     largest_dirty: usize,
+    indirection_xor: usize,
+    indirect_only_bitfield: BitVec,
 }
 impl<T> Debug for ContigStorage<T>
 where
@@ -51,22 +56,33 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         for i in 0..self.capacity() {
-            f.write_fmt(format_args!("{: >4}", i))?
+            f.write_fmt(format_args!(
+                "{: >3}{}",
+                i,
+                if self.indirect_only_bitfield.get(i).unwrap() {
+                    "@"
+                } else {
+                    " "
+                }
+            ))?
         }
-        f.write_str("\n [")?;
+        f.write_str("\n[")?;
         for i in 0..self.capacity() {
             if i > 0 {
                 f.write_str(if i == self.len { "|" } else { "," })?;
             }
             match self.slot_contents(i) {
                 SlotContents::Data => unsafe { self.data[i].value.fmt(f)? },
-                SlotContents::Indirection => f.write_fmt(format_args!("@{}", unsafe {
+                SlotContents::Indirection => f.write_fmt(format_args!("@{: <2}", unsafe {
                     self.data[i].get_indirection()
                 }))?,
                 SlotContents::Nothing => f.write_str(" _ ")?,
             }
         }
-        f.write_fmt(format_args!("] len: {}\n", self.len))
+        f.write_fmt(format_args!(
+            "] len: {}, xor: {:X}\n",
+            self.len, self.indirection_xor
+        ))
     }
 }
 impl<T> ContigStorage<T>
@@ -86,8 +102,15 @@ where
                 std::usize::MAX
             ));
         }
+        let indirection_xor = rand::thread_rng().gen();
         let data = (0..capacity).map(|_| Item::NOTHING_ITEM).collect();
-        Self { data, len: 0 , largest_dirty: 0 }
+        Self {
+            data,
+            len: 0,
+            largest_dirty: 0,
+            indirection_xor,
+            indirect_only_bitfield: BitVec::from_elem(capacity, false),
+        }
     }
     fn slot_contents(&self, index: usize) -> SlotContents {
         if index < self.len {
@@ -101,32 +124,37 @@ where
         }
     }
     pub fn clear(&mut self) {
-    	for x in self.data[0..self.largest_dirty].iter_mut() {
-    		*x = Item::<T>::NOTHING_ITEM; 
-    	}
-    	self.len = 0;
-    	self.largest_dirty = 0;
+        for x in self.data[0..self.largest_dirty].iter_mut() {
+            *x = Item::<T>::NOTHING_ITEM;
+        }
+        self.len = 0;
+        self.largest_dirty = 0;
+        self.indirection_xor = rand::thread_rng().gen();
+        self.indirect_only_bitfield.set_all();
+        self.indirect_only_bitfield.negate();
     }
     pub fn add(&mut self, value: T) -> Option<Key> {
-        if self.len == self.capacity() {
+        if self.len >= self.capacity() {
             return None;
         }
         let boundary = self.len;
-        self.largest_dirty = self.largest_dirty.max(self.len);
+        self.largest_dirty = self.largest_dirty.max(self.len + 1);
         match self.slot_contents(boundary) {
             SlotContents::Nothing => {
                 self.data[boundary].value = value;
                 self.len += 1;
-                Some(Key(boundary))
+                Some(Key(boundary ^ self.indirection_xor))
             }
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[boundary].get_indirection() };
                 // make boundary a direct mapping
                 self.data[boundary].value = unsafe { self.data[real_location].value };
+                self.indirect_only_bitfield.set(boundary, false);
                 // occupy the data previously reached by the indirection
                 self.data[real_location].value = value;
+                self.indirect_only_bitfield.set(real_location, false);
                 self.len += 1;
-                Some(Key(real_location))
+                Some(Key(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => {
                 panic!("Corruption! ContigStorage should NOT have data beyond the boundary!");
@@ -140,26 +168,37 @@ where
         if boundary == index {
             // removed the boundary!
             self.data[index].set_nothing();
+        	self.indirect_only_bitfield.set(index, false);
         } else {
             // boundary now contains a data lement that is LEFT of len
             // must move boundary into my slot and put indirection there
             self.data[index].value = unsafe { self.data[boundary].value };
+            self.indirect_only_bitfield.set(index, true);
             self.data[boundary].set_indirection(index);
         }
         self.len -= 1;
     }
 
     pub fn remove(&mut self, key: Key) -> Option<T> {
-        let index = key.0;
+        let index = key.0 ^ self.indirection_xor;
+        if index >= self.capacity() {
+            return None;
+        }
         match self.slot_contents(index) {
             SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
                 self.data[index].set_nothing();
                 // recursive call
-                self.remove(Key(real_location))
+                // next layer will think its a direct access. permit it!
+            	self.indirect_only_bitfield.set(real_location, false);
+                self.remove(Key(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => {
+            	if self.indirect_only_bitfield.get(index).unwrap() {
+            		// no direct access allowed >=[
+            		return None;
+            	}
                 let value = unsafe { self.data[index].value };
                 self.fill_hole(index);
                 Some(value)
@@ -168,26 +207,32 @@ where
     }
 
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut T> {
-        let index = key.0;
+        let index = key.0 ^ self.indirection_xor;
+        if index >= self.capacity() {
+            return None;
+        }
         match self.slot_contents(index) {
             SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
-                self.get_mut(&Key(real_location))
+                self.get_mut(&Key(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => Some(unsafe { &mut self.data[index].value }),
         }
     }
 
     pub fn get(&mut self, key: &Key) -> Option<&T> {
-        let index = key.0;
+        let index = key.0 ^ self.indirection_xor;
+        if index >= self.capacity() {
+            return None;
+        }
         match self.slot_contents(index) {
             SlotContents::Nothing => {
                 panic!("Invalid Key! Wrong Storage?");
             }
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
-                self.get(&Key(real_location))
+                self.get(&Key(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => Some(unsafe { &mut self.data[index].value }),
         }
@@ -205,10 +250,33 @@ where
         }
         unsafe { std::mem::transmute(&self.data[..self.len]) }
     }
+
+    // pub fn drain(&mut self) -> impl Iterator<Item=T> + '_ {
+    // }
+}
+
+// pub struct ContigDrain<'a, T>(&'a ContigStorage<T>) where T: Copy + Sized;
+// impl<'a, T> Iterator for ContigDrain<'a, T> where T: Copy + Sized {
+// 	type Item=T;
+// 	fn next(&mut self) -> Option<Self::Item> {
+
+// 	}
+// }
+
+impl<'a, T> IntoIterator for &'a ContigStorage<T>
+where
+    T: Copy + Sized,
+{
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.get_slice().into_iter()
+    }
 }
 
 #[allow(unused_variables)]
 fn main() {
+    // println!("{:?}", Item::<usize>::NOTHING_MASK);
     let mut storage = ContigStorage::new(6);
     let ka = storage.add('a').unwrap();
     let kb = storage.add('b').unwrap();
@@ -242,12 +310,26 @@ mod tests {
     }
 
     #[test]
+    fn use_after_clear() {
+        let mut storage = ContigStorage::new(10);
+        let ka = storage.add('a').unwrap();
+        println!("{:?}", &storage);
+        storage.clear();
+        // ka is invalid
+        let _ka2 = storage.add('b').unwrap();
+
+        println!("{:?}", &storage);
+        assert_eq!(storage.get(&ka), None);
+    }
+
+    #[test]
     #[allow(deprecated)]
     fn correct() {
-        const VALUES: usize = 20;
-        const MOVES: usize = 77;
+        const VALUES: usize = 26;
+        const MOVES: usize = 5000;
 
-        let mut rng = rand::thread_rng();
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::SmallRng::from_seed([4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
         let mut storage = ContigStorage::new(VALUES);
 
         let mut unstored: Vec<Data> = (0..VALUES)
@@ -256,7 +338,7 @@ mod tests {
         let mut stored: Vec<Data> = vec![];
         let mut keys: HashMap<Data, Key> = HashMap::new();
 
-        for i in 0..MOVES {
+        for _i in 0..MOVES {
             let mut did_something = false;
             match rng.gen::<f32>() {
                 x if x < 0.5 => {
