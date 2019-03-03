@@ -274,19 +274,6 @@ where
     }
 }
 
-#[allow(unused_variables)]
-fn main() {
-    // println!("{:?}", Item::<usize>::NOTHING_MASK);
-    let mut storage = ContigStorage::new(6);
-    let ka = storage.add('a').unwrap();
-    let kb = storage.add('b').unwrap();
-    let kc = storage.add('c').unwrap();
-    println!("{:?}", &storage);
-    assert_eq!(storage.remove(kb).unwrap(), 'b');
-    println!("{:?}", &storage);
-    assert_eq!(storage.remove(ka).unwrap(), 'a');
-    println!("{:?}", &storage);
-}
 
 #[cfg(test)]
 mod tests {
@@ -370,5 +357,47 @@ mod tests {
                 println!("{:?}", &storage);
             }
         }
+    }
+
+
+    #[test]
+    #[allow(deprecated)]
+    fn big_test() {
+        const VALUES: usize = 1000;
+        const MOVES: usize = 50000;
+
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::SmallRng::from_seed([4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+        let mut storage = ContigStorage::new(VALUES);
+
+        let mut unstored: Vec<usize> = (0..VALUES).collect();
+        let mut stored: Vec<usize> = vec![];
+        let mut keys: HashMap<usize, Key> = HashMap::new();
+
+        for _i in 0..MOVES {
+            match rng.gen::<f32>() {
+                x if x < 0.5 => {
+                    rng.shuffle(&mut unstored);
+                    if let Some(num) = unstored.pop() {
+                        stored.push(num);
+                        keys.insert(num, storage.add(num).unwrap());
+                    }
+                }
+                _ => {
+                    rng.shuffle(&mut stored);
+                    if let Some(num) = stored.pop() {
+                        let k = keys.remove(&num).unwrap();
+                        let val = storage.remove(k).unwrap();
+                        unstored.push(val);
+                        if val != num {
+                            println!("{:?} != {:?}", val, num);
+                            println!("{:?}", &storage);
+                            panic!();
+                        }
+                    }
+                }
+            }
+        }
+        println!("{:?}", storage);
     }
 }
