@@ -57,15 +57,12 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         for i in 0..self.capacity() {
-            f.write_fmt(format_args!(
-                "{: >3}{}",
-                i,
-                if self.indirect_only_bitfield.get(i).unwrap() {
-                    "@"
-                } else {
-                    " "
-                }
-            ))?
+            let x = if self.indirect_only_bitfield.get(i).unwrap() {
+                "@"
+            } else {
+                " "
+            };
+            f.write_fmt(format_args!("{: >3}{}", i, x))?
         }
         f.write_str("\n[")?;
         for i in 0..self.capacity() {
@@ -90,8 +87,7 @@ impl<T> ContigStorage<T>
 where
     T: Copy,
 {
-    #[allow(dead_code)]
-    pub const ITER_OK: bool = std::mem::size_of::<T>() >= std::mem::size_of::<usize>();
+    pub const SLICE_OK: bool = std::mem::size_of::<Item<T>>() <= std::mem::size_of::<T>();
 
     pub fn len(&self) -> usize {
         self.len
@@ -226,9 +222,7 @@ where
             return None;
         }
         match self.slot_contents(index) {
-            SlotContents::Nothing => {
-                panic!("Invalid Key! Wrong Storage?");
-            }
+            SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
                 self.get(&Key(real_location ^ self.indirection_xor))
@@ -238,7 +232,7 @@ where
     }
 
     pub fn get_slice(&self) -> &[T] {
-        if !Self::ITER_OK {
+        if !Self::SLICE_OK {
             #[allow(dead_code)]
             panic!(
                 "Size of your type {} and {}<{}. Values are NOT stored contiguously!",
@@ -248,6 +242,21 @@ where
             );
         }
         unsafe { std::mem::transmute(&self.data[..self.len]) }
+    }
+
+    pub fn get_slice_index(&self, key: &Key) -> Option<usize> {
+        let index = key.0 ^ self.indirection_xor;
+        if index >= self.capacity() {
+            return None;
+        }
+        match self.slot_contents(index) {
+            SlotContents::Nothing => None,
+            SlotContents::Indirection => {
+                let real_location = unsafe { self.data[index].get_indirection() };
+                Some(real_location)
+            }
+            SlotContents::Data => Some(index),
+        }
     }
 
     pub fn drain(&mut self) -> ContigDrain<T> {

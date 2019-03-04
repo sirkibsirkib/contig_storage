@@ -1,4 +1,5 @@
 use super::*;
+use rand::seq::SliceRandom;
 use rand::Rng;
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
@@ -18,7 +19,6 @@ impl Data {
 }
 
 #[test]
-
 fn eg_test() {
     let mut storage = ContigStorage::<u128>::new(512);
     let k5 = storage.add(5).unwrap();
@@ -77,7 +77,6 @@ fn use_after_clear() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn correct() {
     const VALUES: usize = 26;
     const MOVES: usize = 5000;
@@ -96,7 +95,7 @@ fn correct() {
         let mut did_something = false;
         match rng.gen::<f32>() {
             x if x < 0.5 => {
-                rng.shuffle(&mut unstored);
+                unstored.shuffle(&mut rng);
                 if let Some(num) = unstored.pop() {
                     println!("ADD, {:?}", num);
                     stored.push(num);
@@ -105,7 +104,7 @@ fn correct() {
                 }
             }
             _ => {
-                rng.shuffle(&mut stored);
+                stored.shuffle(&mut rng);
                 if let Some(num) = stored.pop() {
                     println!("REM, {:?}", num);
                     let k = keys.remove(&num).unwrap();
@@ -127,7 +126,6 @@ fn correct() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn big_test() {
     const VALUES: usize = 1000;
     const MOVES: usize = 50000;
@@ -143,14 +141,14 @@ fn big_test() {
     for _i in 0..MOVES {
         match rng.gen::<f32>() {
             x if x < 0.5 => {
-                rng.shuffle(&mut unstored);
+                unstored.shuffle(&mut rng);
                 if let Some(num) = unstored.pop() {
                     stored.push(num);
                     keys.insert(num, storage.add(num).unwrap());
                 }
             }
             _ => {
-                rng.shuffle(&mut stored);
+                stored.shuffle(&mut rng);
                 if let Some(num) = stored.pop() {
                     let k = keys.remove(&num).unwrap();
                     let val = storage.remove(&k).unwrap();
@@ -165,4 +163,78 @@ fn big_test() {
         }
     }
     println!("{:?}", storage);
+}
+
+#[test]
+fn slice_index_of() {
+    //TODO check indices are correct
+}
+
+#[test]
+fn benching() {
+    use std::collections::HashMap;
+    use std::time::Instant;
+    const SIZE: usize = 10_000;
+    const HALFSIZE: usize = SIZE / 2;
+    type Data = usize;
+    let mut order: Vec<usize> = (0..SIZE).collect();
+    order.shuffle(&mut rand::thread_rng());
+    ////////////////////////
+
+    let t = Instant::now();
+    let mut storage = ContigStorage::<Data>::new(SIZE);
+    println!("MY alloc {:?}", t.elapsed());
+
+    let t = Instant::now();
+    let mut vec: Vec<Data> = Vec::with_capacity(SIZE);
+    println!("vec alloc {:?}", t.elapsed());
+
+    let t = Instant::now();
+    let mut hashmap: HashMap<Data, Data> = HashMap::with_capacity(SIZE);
+    println!("hashmap alloc {:?}", t.elapsed());
+    /////////////////////////
+
+    let t = Instant::now();
+    let keys: Vec<_> = (0..SIZE).map(|v| storage.add(v).unwrap()).collect();
+    println!("MY push {:?}", t.elapsed());
+
+    let t = Instant::now();
+    for v in 0..SIZE {
+        vec.push(v);
+    }
+    println!("vec push {:?}", t.elapsed());
+
+    let t = Instant::now();
+    for v in 0..SIZE {
+        hashmap.insert(v, v);
+    }
+    println!("hashmap insert {:?}", t.elapsed());
+    ////////////////////////////
+
+    let t = Instant::now();
+    for &index in &order[..HALFSIZE] {
+        let _v = index as Data;
+        let k = &keys[index];
+        let _v2 = storage.remove(k).unwrap();
+    }
+    println!("MY remove {:?}", t.elapsed());
+
+    let t = Instant::now();
+    for &index in &order[..HALFSIZE] {
+        let v = index as Data;
+        let k = &v;
+        let _v2 = hashmap.remove(k).unwrap();
+    }
+    println!("hashmap remove {:?}", t.elapsed());
+
+    let t = Instant::now();
+    for &index in &order[HALFSIZE..] {
+        let v = index;
+        storage.add(v).unwrap();
+    }
+    println!("MY push (contents dirty) {:?}", t.elapsed());
+
+    let t = Instant::now();
+    storage.clear();
+    println!("MY clear {:?}", t.elapsed());
 }
