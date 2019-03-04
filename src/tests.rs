@@ -1,5 +1,6 @@
 use super::*;
 use rand::seq::SliceRandom;
+use std::collections::HashMap;
 use rand::Rng;
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]

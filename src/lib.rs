@@ -1,6 +1,5 @@
 use bit_vec::BitVec;
 use rand::Rng;
-use std::collections::HashMap;
 use std::fmt::{self, Debug};
 
 #[cfg(test)]
@@ -34,8 +33,18 @@ where
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Key(usize);
+// #[derive(Debug, Hash, PartialEq, Eq)]
+// pub struct Key(usize);
+pub type Key = usize;
+trait Keylike {
+    fn key_wrap(x: usize) -> Self;
+    fn key_unwrap(self) -> Self;
+}
+impl Keylike for Key {
+    fn key_wrap(x: usize) -> Self { x }
+    fn key_unwrap(self) -> Self { self }
+}
+
 
 #[derive(Debug)]
 enum SlotContents {
@@ -138,7 +147,7 @@ where
             SlotContents::Nothing => {
                 self.data[boundary].value = value;
                 self.len += 1;
-                Some(Key(boundary ^ self.indirection_xor))
+                Some(Key::key_wrap(boundary ^ self.indirection_xor))
             }
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[boundary].get_indirection() };
@@ -149,7 +158,7 @@ where
                 self.data[real_location].value = value;
                 self.indirect_only_bitfield.set(real_location, false);
                 self.len += 1;
-                Some(Key(real_location ^ self.indirection_xor))
+                Some(Key::key_wrap(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => {
                 panic!("Corruption! ContigStorage should NOT have data beyond the boundary!");
@@ -175,7 +184,7 @@ where
     }
 
     pub fn remove(&mut self, key: &Key) -> Option<T> {
-        let index = key.0 ^ self.indirection_xor;
+        let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
         }
@@ -187,7 +196,7 @@ where
                 // recursive call
                 // next layer will think its a direct access. permit it!
                 self.indirect_only_bitfield.set(real_location, false);
-                self.remove(&Key(real_location ^ self.indirection_xor))
+                self.remove(&Key::key_wrap(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => {
                 if self.indirect_only_bitfield.get(index).unwrap() {
@@ -202,7 +211,7 @@ where
     }
 
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut T> {
-        let index = key.0 ^ self.indirection_xor;
+        let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
         }
@@ -210,14 +219,14 @@ where
             SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
-                self.get_mut(&Key(real_location ^ self.indirection_xor))
+                self.get_mut(&Key::key_wrap(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => Some(unsafe { &mut self.data[index].value }),
         }
     }
 
     pub fn get(&self, key: &Key) -> Option<&T> {
-        let index = key.0 ^ self.indirection_xor;
+        let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
         }
@@ -225,7 +234,7 @@ where
             SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
-                self.get(&Key(real_location ^ self.indirection_xor))
+                self.get(&Key::key_wrap(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => Some(unsafe { &self.data[index].value }),
         }
@@ -245,7 +254,7 @@ where
     }
 
     pub fn get_slice_index(&self, key: &Key) -> Option<usize> {
-        let index = key.0 ^ self.indirection_xor;
+        let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
         }

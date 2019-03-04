@@ -1,4 +1,25 @@
-# contig_storage
+# contig storage
+
+A `ContigStorage<T>` is a collection of `T` where `T: Copy`. Each `add` generates a `Key` that can be used to access, modify or remove the value later.
+
+This crate provides a set-like data structure that acts much like those supplied by [slotmap](https://crates.io/crates/slotmap), [slab](https://crates.io/crates/slab) and [generational-arena](https://crates.io/crates/generational-arena), but focuses on an important feature: The ability to (cheaply) access `ContigStorage<T>`'s data as `&[T]` or `&mut [T]`. This was originally intended for the use case of CPU-side persistent buffers that can be _directly_ sent to the GPU (for example: an array of transform matrices for instanced rendering).
+
+## Slice condition
+
+The implementation makes use of an _untagged union_ to store bookkeeping data in-place of an empty buffer. This introduces a requirement: Your data is only stored contiguously _and densely_ if the size of `T` >= the size of `usize`. If this is not the case, you can still use the structure for everything else, but `get_slice()` will *panic*.
+
+## API
+
+ It provides an interface similar to `slotmap`: passing in a `T` with `add` returns a `Key`, which can be used to access or modify it in-place later, or remove it, all in constant time. The storage can be iterated and drained.
+
+## ABA problem \*resistance\*
+
+It is _resistant_ to the ABA problem by relying on large random hashes (in a way that hardly impacts performance). Each access with an invalid key has a `L/M` probability of erroneously returning data where `L` is the number of elements in the store, and `M` is 2^64. If you want to avoid this problem: don't use the wrong keys :^)
+
+
+Most importantly, _if the size of `T` is >= that of `usize`_, all the contained data can be accessed as a contiguous slice `&[T]` or `&mut [T]`. 
+
+Much like , 
 
 ```rust
 let mut storage = ContigStorage::<u128>::new(512);
