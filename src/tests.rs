@@ -127,6 +127,27 @@ fn correct() {
 }
 
 #[test]
+fn new_keys() {
+    const VALUES: usize = 5;
+    const REPS: usize = 5;
+    let data: [u64; VALUES] = [21; VALUES];
+
+    let mut storage = ContigStorage::new(VALUES);
+    let keys_a: Vec<_> = data.iter().map(|&d| storage.add(d).unwrap()).collect();
+    
+    for _ in 0..REPS {
+        let keys_b: Vec<_> = storage.assign_new_keys().collect();
+        assert_eq!(keys_a.len(), keys_b.len());
+        for ((a, b), value) in keys_a.iter().zip(keys_b.iter()).zip(data.iter()) {
+            println!("{:?}", (a,b));
+            assert_ne!(a, b);
+            assert_eq!(None, storage.get(a));
+            assert_eq!(Some(value), storage.get(b));
+        }
+    }
+}
+
+#[test]
 fn big_test() {
     const VALUES: usize = 1000;
     const MOVES: usize = 50000;

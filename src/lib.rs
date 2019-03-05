@@ -56,7 +56,7 @@ enum SlotContents {
 pub struct ContigStorage<T: Copy> {
     data: Vec<Item<T>>,
     len: usize,
-    largest_dirty: usize,
+    start_of_clean: usize,
     indirection_xor: usize,
     indirect_only_bitfield: BitVec,
 }
@@ -111,7 +111,7 @@ where
         Self {
             data: (0..capacity).map(|_| Item::NOTHING_ITEM).collect(),
             len: 0,
-            largest_dirty: 0,
+            start_of_clean: 0,
             indirection_xor: rand::thread_rng().gen(),
             indirect_only_bitfield: BitVec::from_elem(capacity, false),
         }
@@ -128,21 +128,38 @@ where
         }
     }
     pub fn clear(&mut self) {
-        for x in self.data[0..self.largest_dirty].iter_mut() {
+        for x in self.data[0..self.start_of_clean].iter_mut() {
             *x = Item::<T>::NOTHING_ITEM;
         }
         self.len = 0;
-        self.largest_dirty = 0;
+        self.start_of_clean = 0;
         self.indirection_xor = rand::thread_rng().gen();
         self.indirect_only_bitfield.set_all();
         self.indirect_only_bitfield.negate();
+    }
+    pub fn invalidate_keys(&mut self) {
+        self.indirection_xor = rand::thread_rng().gen();
+    }
+    pub fn assign_new_keys(&mut self) -> impl Iterator<Item=Key> + '_ {
+        println!("LEN IS {} SOC IS {}", self.len, self.start_of_clean);
+        //TODO test 
+        for x in self.data[self.len..self.start_of_clean].iter_mut() {
+            *x = Item::<T>::NOTHING_ITEM;
+        }
+        self.start_of_clean = self.len;
+        self.indirection_xor = rand::thread_rng().gen();
+        self.indirect_only_bitfield.set_all();
+        self.indirect_only_bitfield.negate();
+
+        (0..self.len)
+        .map(move |i| Key::key_wrap(i ^ self.indirection_xor))
     }
     pub fn add(&mut self, value: T) -> Option<Key> {
         if self.len >= self.capacity() {
             return None;
         }
         let boundary = self.len;
-        self.largest_dirty = self.largest_dirty.max(self.len + 1);
+        self.start_of_clean = self.start_of_clean.max(self.len + 1);
         match self.slot_contents(boundary) {
             SlotContents::Nothing => {
                 self.data[boundary].value = value;

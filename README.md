@@ -1,16 +1,27 @@
 # contig storage
 
-A `ContigStorage<T>` is a collection of `T` where `T: Copy`. Each `add` generates a `Key` that can be used to access, modify or remove the value later.
+A `ContigStorage<T>` is a collection of `T` where `T: Copy`. Like [slotmap](https://crates.io/crates/slotmap),
+inserting a value returns a `usize` key, which can be used to access the value later. Most importantly, the contents of the storage can always be accessed as a contiguous slice `&[T]` or `&mut [T]`. 
 
-This crate provides a set-like data structure that acts much like those supplied by [slotmap](https://crates.io/crates/slotmap), [slab](https://crates.io/crates/slab) and [generational-arena](https://crates.io/crates/generational-arena), but focuses on an important feature: The ability to (cheaply) access `ContigStorage<T>`'s data as `&[T]` or `&mut [T]`. This was originally intended for the use case of CPU-side persistent buffers that can be _directly_ sent to the GPU (for example: an array of transform matrices for instanced rendering).
+This structure was originally envisitioned with the purpose of buffering transform matrices to be sent to the GPU.
+
+## Example
+```rust
+let mut storage = ContigStorage::<u128>::new(512);
+let k5 = storage.add(5);
+assert_eq!(storage.get(&k5), Some(&5));
+storage.clear();
+assert_eq!(storage.get(&k5), None);
+```
 
 ## Slice condition
 
 The implementation makes use of an _untagged union_ to store bookkeeping data in-place of an empty buffer. This introduces a requirement: Your data is only stored contiguously _and densely_ if the size of `T` >= the size of `usize`. If this is not the case, you can still use the structure for everything else, but `get_slice()` will *panic*.
 
-## API
+## Properties
 
- It provides an interface similar to `slotmap`: passing in a `T` with `add` returns a `Key`, which can be used to access or modify it in-place later, or remove it, all in constant time. The storage can be iterated and drained.
+* Returns `None` if accessed with an invalid key in 1-(N/M) of cases, where N is the number of elements stored, and M is std::usize::MAX. 
+* Can be iterated over  
 
 ## ABA problem \*resistance\*
 
@@ -21,13 +32,6 @@ Most importantly, _if the size of `T` is >= that of `usize`_, all the contained 
 
 Much like , 
 
-```rust
-let mut storage = ContigStorage::<u128>::new(512);
-let k5 = storage.add(5);
-assert_eq!(storage.get(&k5), Some(&5));
-storage.clear();
-assert_eq!(storage.get(&k5), None);
-```
 
 Structure that is able to store Copy values.
 allows addition and removal in constant time.
