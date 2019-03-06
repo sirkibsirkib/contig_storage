@@ -8,10 +8,10 @@ This structure was originally envisitioned with the purpose of buffering transfo
 ## Example
 ```rust
 let mut storage = ContigStorage::<u128>::new(512);
-let k5 = storage.add(5);
-assert_eq!(storage.get(&k5), Some(&5));
+let k5: usize = storage.add(5);
+assert_eq!(storage.get(k5), Some(&5));
 storage.clear();
-assert_eq!(storage.get(&k5), None);
+assert_eq!(storage.get(k5), None);
 ```
 
 ## Slice condition

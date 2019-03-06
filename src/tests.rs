@@ -24,29 +24,29 @@ fn eg_test() {
     let mut storage = ContigStorage::<u128>::new(512);
     let k5 = storage.add(5).unwrap();
 
-    assert_eq!(storage.get(&k5), Some(&5));
-    assert_eq!(storage.get(&k5), Some(&5));
-    assert_eq!(storage.get(&k5), Some(&5));
+    assert_eq!(storage.get(k5), Some(&5));
+    assert_eq!(storage.get(k5), Some(&5));
+    assert_eq!(storage.get(k5), Some(&5));
 
-    assert_eq!(storage.remove(&k5), Some(5));
-    assert_eq!(storage.remove(&k5), None);
+    assert_eq!(storage.remove(k5), Some(5));
+    assert_eq!(storage.remove(k5), None);
 
     let k9 = storage.add(9).unwrap();
     assert_eq!(storage.get_slice().len(), 1);
     assert_eq!((&storage).into_iter().count(), 1);
     storage.clear();
-    assert_eq!(storage.remove(&k9), None);
+    assert_eq!(storage.remove(k9), None);
     assert_eq!(storage.get_slice().len(), 0);
     assert_eq!(0, storage.drain().count());
     let _k1 = storage.add(1).unwrap();
     let _k2 = storage.add(2).unwrap();
     let _k3 = storage.add(3).unwrap();
-    storage.remove(&_k1);
+    storage.remove(_k1);
     assert_ne!(vec![&1, &2, &3], storage.iter().collect::<Vec<_>>());
     storage.clear();
 
     let k1 = storage.add(1).unwrap();
-    assert_eq!(storage[&k1], 1);
+    assert_eq!(storage[k1], 1);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn slicing() {
     let expected: Vec<_> = rng.clone().collect();
     assert_eq!(&expected[..], storage.get_slice());
     for (k, v) in keys.into_iter().zip(rng) {
-        assert_eq!(storage.remove(&k), Some(v));
+        assert_eq!(storage.remove(k), Some(v));
         println!("{:?}", (k, v));
     }
 }
@@ -74,13 +74,13 @@ fn use_after_clear() {
     let _ka2 = storage.add('b').unwrap();
 
     println!("{:?}", &storage);
-    assert_eq!(storage.get(&ka), None);
+    assert_eq!(storage.get(ka), None);
 }
 
 #[test]
 fn correct() {
     const VALUES: usize = 26;
-    const MOVES: usize = 5000;
+    const MOVES: usize = 300;
 
     use rand::SeedableRng;
     let mut rng = rand::rngs::SmallRng::from_seed([4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
@@ -98,18 +98,19 @@ fn correct() {
             x if x < 0.5 => {
                 unstored.shuffle(&mut rng);
                 if let Some(num) = unstored.pop() {
-                    println!("ADD, {:?}", num);
                     stored.push(num);
-                    keys.insert(num, storage.add(num).unwrap());
+                    let k = storage.add(num).unwrap();
+                    keys.insert(num, k);
+                    println!("ADD, {:?}, got key {}", num, k);
                     did_something = true;
                 }
             }
             _ => {
                 stored.shuffle(&mut rng);
                 if let Some(num) = stored.pop() {
-                    println!("REM, {:?}", num);
                     let k = keys.remove(&num).unwrap();
-                    let val: Data = storage.remove(&k).unwrap();
+                    println!("REM, {:?} with {}", num, k);
+                    let val: Data = storage.remove(k).unwrap();
                     unstored.push(val);
                     if val != num {
                         println!("{:?} != {:?}", val, num);
@@ -138,7 +139,7 @@ fn new_keys() {
     for _ in 0..REPS {
         let keys_b: Vec<_> = storage.assign_new_keys().collect();
         assert_eq!(keys_a.len(), keys_b.len());
-        for ((a, b), value) in keys_a.iter().zip(keys_b.iter()).zip(data.iter()) {
+        for ((&a, &b), value) in keys_a.iter().zip(keys_b.iter()).zip(data.iter()) {
             println!("{:?}", (a,b));
             assert_ne!(a, b);
             assert_eq!(None, storage.get(a));
@@ -173,7 +174,7 @@ fn big_test() {
                 stored.shuffle(&mut rng);
                 if let Some(num) = stored.pop() {
                     let k = keys.remove(&num).unwrap();
-                    let val = storage.remove(&k).unwrap();
+                    let val = storage.remove(k).unwrap();
                     unstored.push(val);
                     if val != num {
                         println!("{:?} != {:?}", val, num);
@@ -196,7 +197,7 @@ fn slice_index_of() {
 fn benching() {
     use std::collections::HashMap;
     use std::time::Instant;
-    const SIZE: usize = 10_000;
+    const SIZE: usize = 10_000_000;
     const HALFSIZE: usize = SIZE / 2;
     type Data = usize;
     let mut order: Vec<usize> = (0..SIZE).collect();
@@ -236,7 +237,7 @@ fn benching() {
     let t = Instant::now();
     for &index in &order[..HALFSIZE] {
         let _v = index as Data;
-        let k = &keys[index];
+        let k = keys[index];
         let _v2 = storage.remove(k).unwrap();
     }
     println!("MY remove {:?}", t.elapsed());

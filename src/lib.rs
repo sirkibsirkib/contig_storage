@@ -5,6 +5,7 @@ use std::fmt::{self, Debug};
 #[cfg(test)]
 mod tests;
 
+#[derive(Copy, Clone)]
 union Item<T: Copy + Clone> {
     value: T,
     indirection: usize,
@@ -33,8 +34,8 @@ where
     }
 }
 
-// #[derive(Debug, Hash, PartialEq, Eq)]
-// pub struct Key(usize);
+
+// THIS IS ONLY HERE SO I CAN CHANGE THE API MORE EASILY IF I NEED TO
 pub type Key = usize;
 trait Keylike {
     fn key_wrap(x: usize) -> Self;
@@ -96,8 +97,32 @@ impl<T> ContigStorage<T>
 where
     T: Copy,
 {
+    fn copy_value(&self, index: usize) -> T {
+        // HERE THERE BE UNSAFETY
+        unsafe {
+            self.data[index].value
+            // self.data.get_unchecked(index).value
+        }
+    }
+    fn get_value(&self, index: usize) -> &T {
+        // HERE THERE BE UNSAFETY
+        unsafe {
+            &self.data[index].value
+            // &self.data.get_unchecked(index).value
+        }
+    }
+    fn get_mut_value(&mut self, index: usize) -> &mut T {
+        // HERE THERE BE UNSAFETY
+        unsafe {
+            &mut self.data[index].value
+            // &mut self.data.get_unchecked_mut(index).value
+        }
+    }
     pub const SLICE_OK: bool = std::mem::size_of::<Item<T>>() <= std::mem::size_of::<T>();
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
     pub fn len(&self) -> usize {
         self.len
     }
@@ -109,7 +134,7 @@ where
             panic!("ContigStorage can support a capacity up to std::usize::MAX-1");
         }
         Self {
-            data: (0..capacity).map(|_| Item::NOTHING_ITEM).collect(),
+            data: std::iter::repeat(Item::NOTHING_ITEM).take(capacity).collect(),
             len: 0,
             start_of_clean: 0,
             indirection_xor: rand::thread_rng().gen(),
@@ -119,12 +144,10 @@ where
     fn slot_contents(&self, index: usize) -> SlotContents {
         if index < self.len {
             SlotContents::Data
+        } else if unsafe { self.data[index].is_nothing() } {
+            SlotContents::Nothing
         } else {
-            if unsafe { self.data[index].is_nothing() } {
-                SlotContents::Nothing
-            } else {
-                SlotContents::Indirection
-            }
+            SlotContents::Indirection
         }
     }
     pub fn clear(&mut self) {
@@ -169,7 +192,7 @@ where
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[boundary].get_indirection() };
                 // make boundary a direct mapping
-                self.data[boundary].value = unsafe { self.data[real_location].value };
+                self.data[boundary].value = self.copy_value(real_location);
                 self.indirect_only_bitfield.set(boundary, false);
                 // occupy the data previously reached by the indirection
                 self.data[real_location].value = value;
@@ -193,14 +216,14 @@ where
         } else {
             // boundary now contains a data lement that is LEFT of len
             // must move boundary into my slot and put indirection there
-            self.data[index].value = unsafe { self.data[boundary].value };
+            self.data[index].value = self.copy_value(boundary);
             self.indirect_only_bitfield.set(index, true);
             self.data[boundary].set_indirection(index);
         }
         self.len -= 1;
     }
 
-    pub fn remove(&mut self, key: &Key) -> Option<T> {
+    pub fn remove(&mut self, key: Key) -> Option<T> {
         let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
@@ -213,21 +236,21 @@ where
                 // recursive call
                 // next layer will think its a direct access. permit it!
                 self.indirect_only_bitfield.set(real_location, false);
-                self.remove(&Key::key_wrap(real_location ^ self.indirection_xor))
+                self.remove(Key::key_wrap(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => {
                 if self.indirect_only_bitfield.get(index).unwrap() {
                     // no direct access allowed >=[
                     return None;
                 }
-                let value = unsafe { self.data[index].value };
+                let value = self.copy_value(index);
                 self.fill_hole(index);
                 Some(value)
             }
         }
     }
 
-    pub fn get_mut(&mut self, key: &Key) -> Option<&mut T> {
+    pub fn get_mut(&mut self, key: Key) -> Option<&mut T> {
         let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
@@ -236,13 +259,13 @@ where
             SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
-                self.get_mut(&Key::key_wrap(real_location ^ self.indirection_xor))
+                self.get_mut(Key::key_wrap(real_location ^ self.indirection_xor))
             }
-            SlotContents::Data => Some(unsafe { &mut self.data[index].value }),
+            SlotContents::Data => Some(self.get_mut_value(index)),
         }
     }
 
-    pub fn get(&self, key: &Key) -> Option<&T> {
+    pub fn get(&self, key: Key) -> Option<&T> {
         let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
@@ -251,9 +274,9 @@ where
             SlotContents::Nothing => None,
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[index].get_indirection() };
-                self.get(&Key::key_wrap(real_location ^ self.indirection_xor))
+                self.get(Key::key_wrap(real_location ^ self.indirection_xor))
             }
-            SlotContents::Data => Some(unsafe { &self.data[index].value }),
+            SlotContents::Data => Some(self.get_value(index)),
         }
     }
 
@@ -266,11 +289,15 @@ where
                 std::mem::size_of::<T>(),
                 std::mem::size_of::<usize>()
             );
+        } else {
+            unsafe {
+                &*(&self.data[..self.len] as *const [Item<T>] as *const [T])
+            }
         }
-        unsafe { std::mem::transmute(&self.data[..self.len]) }
+        // unsafe { std::mem::transmute(&self.data[..self.len]) }
     }
 
-    pub fn get_slice_index(&self, key: &Key) -> Option<usize> {
+    pub fn get_slice_index(&self, key: Key) -> Option<usize> {
         let index = key.key_unwrap() ^ self.indirection_xor;
         if index >= self.capacity() {
             return None;
@@ -309,7 +336,7 @@ where
             None
         } else {
             self.1 += 1;
-            Some(unsafe { self.0.data[self.1 - 1].value })
+            Some(self.0.copy_value(self.1 - 1))
         }
     }
 }
@@ -321,25 +348,25 @@ where
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
     fn into_iter(self) -> Self::IntoIter {
-        self.get_slice().into_iter()
+        self.get_slice().iter()
     }
 }
 
-impl<T> std::ops::Index<&Key> for ContigStorage<T>
+impl<T> std::ops::Index<Key> for ContigStorage<T>
 where
     T: Copy,
 {
     type Output = T;
-    fn index(&self, key: &Key) -> &T {
+    fn index(&self, key: Key) -> &T {
         self.get(key)
             .expect("ContigStorage indexed with invalid key.")
     }
 }
-impl<T> std::ops::IndexMut<&Key> for ContigStorage<T>
+impl<T> std::ops::IndexMut<Key> for ContigStorage<T>
 where
     T: Copy,
 {
-    fn index_mut(&mut self, key: &Key) -> &mut T {
+    fn index_mut(&mut self, key: Key) -> &mut T {
         self.get_mut(key)
             .expect("ContigStorage indexed with invalid key.")
     }
