@@ -21,7 +21,7 @@ impl Data {
 
 #[test]
 fn eg_test() {
-    let mut storage = ContigStorage::<u128>::new(512);
+    let mut storage = ContigStorage::<u128>::new(512, GrowBehavior::None);
     let k5 = storage.add(5).unwrap();
 
     assert_eq!(storage.get(k5), Some(&5));
@@ -51,7 +51,7 @@ fn eg_test() {
 
 #[test]
 fn slicing() {
-    let mut storage = ContigStorage::new(100);
+    let mut storage = ContigStorage::new(100, GrowBehavior::None);
     let nothing: [u128; 0] = [];
     assert_eq!(&nothing, storage.get_slice());
     let rng = 0u128..100;
@@ -66,7 +66,7 @@ fn slicing() {
 
 #[test]
 fn use_after_clear() {
-    let mut storage = ContigStorage::new(10);
+    let mut storage = ContigStorage::new(10, GrowBehavior::None);
     let ka = storage.add('a').unwrap();
     println!("{:?}", &storage);
     storage.clear();
@@ -84,7 +84,7 @@ fn correct() {
 
     use rand::SeedableRng;
     let mut rng = rand::rngs::SmallRng::from_seed([4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    let mut storage = ContigStorage::new(VALUES);
+    let mut storage = ContigStorage::new(VALUES, GrowBehavior::None);
 
     let mut unstored: Vec<Data> = (0..VALUES)
         .map(|x| Data::new((x as u8 + 97) as char))
@@ -133,7 +133,7 @@ fn new_keys() {
     const REPS: usize = 5;
     let data: [u64; VALUES] = [21; VALUES];
 
-    let mut storage = ContigStorage::new(VALUES);
+    let mut storage = ContigStorage::new(VALUES, GrowBehavior::None);
     let keys_a: Vec<_> = data.iter().map(|&d| storage.add(d).unwrap()).collect();
     
     for _ in 0..REPS {
@@ -155,7 +155,48 @@ fn big_test() {
 
     use rand::SeedableRng;
     let mut rng = rand::rngs::SmallRng::from_seed([4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    let mut storage = ContigStorage::new(VALUES);
+    let mut storage = ContigStorage::new(VALUES, GrowBehavior::None);
+
+    let mut unstored: Vec<usize> = (0..VALUES).collect();
+    let mut stored: Vec<usize> = vec![];
+    let mut keys: HashMap<usize, Key> = HashMap::new();
+
+    for _i in 0..MOVES {
+        match rng.gen::<f32>() {
+            x if x < 0.5 => {
+                unstored.shuffle(&mut rng);
+                if let Some(num) = unstored.pop() {
+                    stored.push(num);
+                    keys.insert(num, storage.add(num).unwrap());
+                }
+            }
+            _ => {
+                stored.shuffle(&mut rng);
+                if let Some(num) = stored.pop() {
+                    let k = keys.remove(&num).unwrap();
+                    let val = storage.remove(k).unwrap();
+                    unstored.push(val);
+                    if val != num {
+                        println!("{:?} != {:?}", val, num);
+                        println!("{:?}", &storage);
+                        panic!();
+                    }
+                }
+            }
+        }
+    }
+    println!("{:?}", storage);
+}
+
+
+#[test]
+fn growing_test() {
+    const VALUES: usize = 2000;
+    const MOVES: usize = 1000000;
+
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut storage = ContigStorage::new(0, GrowBehavior::Doubling);
 
     let mut unstored: Vec<usize> = (0..VALUES).collect();
     let mut stored: Vec<usize> = vec![];
@@ -189,11 +230,6 @@ fn big_test() {
 }
 
 #[test]
-fn slice_index_of() {
-    //TODO check indices are correct
-}
-
-#[test]
 fn benching() {
     use std::collections::HashMap;
     use std::time::Instant;
@@ -205,7 +241,7 @@ fn benching() {
     ////////////////////////
 
     let t = Instant::now();
-    let mut storage = ContigStorage::<Data>::new(SIZE);
+    let mut storage = ContigStorage::<Data>::new(SIZE, GrowBehavior::None);
     println!("MY alloc {:?}", t.elapsed());
 
     let t = Instant::now();

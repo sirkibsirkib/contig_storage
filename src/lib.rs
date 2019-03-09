@@ -54,12 +54,22 @@ enum SlotContents {
     Nothing,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum GrowBehavior {
+    Doubling,
+    None,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct FullError;
+
 pub struct ContigStorage<T: Copy> {
     data: Vec<Item<T>>,
     len: usize,
     start_of_clean: usize,
     indirection_xor: usize,
     indirect_only_bitfield: BitVec,
+    pub grow_behavior: GrowBehavior,
 }
 impl<T> Debug for ContigStorage<T>
 where
@@ -118,7 +128,6 @@ where
             // &mut self.data.get_unchecked_mut(index).value
         }
     }
-    pub const SLICE_OK: bool = std::mem::size_of::<Item<T>>() <= std::mem::size_of::<T>();
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
@@ -129,13 +138,20 @@ where
     pub fn capacity(&self) -> usize {
         self.data.len()
     }
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(mut capacity: usize, grow_behavior: GrowBehavior) -> Self {
+        if std::mem::size_of::<Item<T>>() > std::mem::size_of::<T>() {
+            panic!("Cannot store contiguously! Size of type ({} bytes) < size of usize ({})",
+                std::mem::size_of::<T>(),
+                std::mem::size_of::<Item<T>>());
+        }
+
         if capacity == std::usize::MAX {
-            panic!("ContigStorage can support a capacity up to std::usize::MAX-1");
+            capacity -= 1;
         }
         Self {
             data: std::iter::repeat(Item::NOTHING_ITEM).take(capacity).collect(),
             len: 0,
+            grow_behavior,
             start_of_clean: 0,
             indirection_xor: rand::thread_rng().gen(),
             indirect_only_bitfield: BitVec::from_elem(capacity, false),
@@ -177,9 +193,30 @@ where
         (0..self.len)
         .map(move |i| Key::key_wrap(i ^ self.indirection_xor))
     }
-    pub fn add(&mut self, value: T) -> Option<Key> {
+    pub fn add(&mut self, value: T) -> Result<Key,FullError> {
+        // println!("ADD");
         if self.len >= self.capacity() {
-            return None;
+            if GrowBehavior::None == self.grow_behavior
+            || self.capacity() == std::usize::MAX-1 {
+                return Err(FullError);
+            } else {
+                // grow!
+                let start = std::time::Instant::now();
+                let new_capacity = self.capacity().saturating_add(2).saturating_mul(2).min(std::usize::MAX-1);
+                let mut new_data = Vec::with_capacity(new_capacity);
+                unsafe { new_data.set_len(new_capacity); }
+                let e = self.len;
+                for (src, dest) in self.data[0..e].iter().zip(new_data[0..e].iter_mut()) {
+                    *dest = *src;
+                }
+                for dest in new_data[e..].iter_mut() {
+                    *dest = Item::NOTHING_ITEM;
+                }
+                self.data = new_data;
+                self.indirect_only_bitfield.grow(new_capacity, false);
+                println!("{:?}", start.elapsed());
+                println!("GREW. new capacity is {}", self.capacity());
+            }
         }
         let boundary = self.len;
         self.start_of_clean = self.start_of_clean.max(self.len + 1);
@@ -187,7 +224,7 @@ where
             SlotContents::Nothing => {
                 self.data[boundary].value = value;
                 self.len += 1;
-                Some(Key::key_wrap(boundary ^ self.indirection_xor))
+                Ok(Key::key_wrap(boundary ^ self.indirection_xor))
             }
             SlotContents::Indirection => {
                 let real_location = unsafe { self.data[boundary].get_indirection() };
@@ -198,7 +235,7 @@ where
                 self.data[real_location].value = value;
                 self.indirect_only_bitfield.set(real_location, false);
                 self.len += 1;
-                Some(Key::key_wrap(real_location ^ self.indirection_xor))
+                Ok(Key::key_wrap(real_location ^ self.indirection_xor))
             }
             SlotContents::Data => {
                 panic!("Corruption! ContigStorage should NOT have data beyond the boundary!");
@@ -281,20 +318,9 @@ where
     }
 
     pub fn get_slice(&self) -> &[T] {
-        if !Self::SLICE_OK {
-            #[allow(dead_code)]
-            panic!(
-                "Size of your type {} and {}<{}. Values are NOT stored contiguously!",
-                std::mem::size_of::<T>(),
-                std::mem::size_of::<T>(),
-                std::mem::size_of::<usize>()
-            );
-        } else {
-            unsafe {
-                &*(&self.data[..self.len] as *const [Item<T>] as *const [T])
-            }
+        unsafe {
+            &*(&self.data[..self.len] as *const [Item<T>] as *const [T])
         }
-        // unsafe { std::mem::transmute(&self.data[..self.len]) }
     }
 
     pub fn get_slice_index(&self, key: Key) -> Option<usize> {
